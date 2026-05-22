@@ -30,13 +30,15 @@ impl Catcher {
             let tx = sender.clone();
             let c_addr = contract.address;
             let c_name = contract.name.clone();
+            let start_block = contract.start_block;
+            let c_chain_id = contract.chain_id;
 
             tokio::spawn(async move {
                 println!("Start watching : {} Address: {}", c_name, c_addr);
 
                 let mut filter = Filter::new().address(c_addr);
-                filter = match contract.start_block {
-                    Some(from) => filter.from_block(from.into()),
+                filter = match start_block {
+                    Some(from) => filter.from_block(from),
                     None => filter.from_block(BlockNumberOrTag::Latest),
                 };
 
@@ -47,6 +49,7 @@ impl Catcher {
                             for log in logs {
                                 let event = Event {
                                     contract_name: c_name.clone(),
+                                    chain_id: c_chain_id,
                                     tx_hash: log.transaction_hash,
                                     log,
                                 };

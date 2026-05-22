@@ -1,61 +1,42 @@
-use alloy::primitives::Address;
-use myfuckingreallymonitor::config::{Event, MonitorContract};
-use myfuckingreallymonitor::connector::BlockchainConnector;
-use myfuckingreallymonitor::db;
-use myfuckingreallymonitor::processor::{prase::process_log, Catcher};
+use chrono::format;
+use evm_monitor::connector::BlockchainConnector;
+use evm_monitor::db;
+use evm_monitor::log;
+use evm_monitor::processor::run_pipeline;
 use std::error::Error;
-use std::str::FromStr;
-use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    println!("Hello, myfuckingreallymonitor!");
+    log::init()?;
+    log::info("Hello, EVM_Monitor!");
 
     let connector = BlockchainConnector::build()?;
 
-    match connector.get_block_number().await {
-        Ok(num) => println!("Current block number: {}", num),
-        Err(e) => println!("Error fetching block number: {}", e),
-    }
+    // 异步等待DB出现可用地址
+    let contracts = tokio::task::spawn_blocking(|| {
+        db::load_contracts_with_env_fallback().map_err(|e| e.to_string())
+    })
+    .await??;
 
-    let db = db::init_db()?;
-    let mut contracts = db::load_monitor_contracts(&db)?;
 
-    if contracts.is_empty() {
-        println!("DB monitor_contracts table is empty; falling back to env MONITOR_CONTRACT_ADDRESS.");
-        let contract_addr = match std::env::var("MONITOR_CONTRACT_ADDRESS") {
-            Ok(addr) => match Address::from_str(&addr) {
-                Ok(parsed) => parsed,
-                Err(_) => {
-                    eprintln!("MONITOR_CONTRACT_ADDRESS is invalid; expected hex address (0x...).");
-                    return Ok(());
-                }
-            },
-            Err(_) => {
-                println!("MONITOR_CONTRACT_ADDRESS not set; no contracts to monitor.");
-                return Ok(());
-            }
-        };
-
-        let contract_name = std::env::var("MONITOR_CONTRACT_NAME")
-            .unwrap_or_else(|_| "MonitoredContract".to_string());
-
-        contracts.push(MonitorContract {
-            address: contract_addr,
-            name: contract_name,
-            chain_id: None,
-            start_block: None,
-            is_active: true,
-        });
-    }
-
-    let (tx, mut rx) = mpsc::channel::<Event>(100);
-    let catcher = Catcher::new(connector, contracts);
-    catcher.run(tx).await?;
-
-    while let Some(event) = rx.recv().await {
-        process_log(event);
-    }
-
+    log_startup(&contracts);
+    run_pipeline(connector, contracts).await?;
     Ok(())
+}
+
+fn log_startup(contracts: &[evm_monitor::config::MonitorContract]) {
+    let mut entries = Vec::new();
+    for c in contracts {
+        let from = c.start_block.map_or_else(|| "latest".to_string(), |b| b.to_string());
+        entries.push(format!("{} (from={})", c.name, from));
+    }
+    log::info(&format!("startup, monitoring: {}", entries.join("; ")));
+    log::info(&format!("Load {} contracts", contracts.len()));
+    for c in contracts {
+        log::info(&format!(
+            "contract name: {}, chain_id: {:?}, start_block: {:?}",
+            c.name, c.chain_id, c.start_block
+        ));
+    }
 }

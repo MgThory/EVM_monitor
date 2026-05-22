@@ -43,12 +43,3 @@ impl BlockchainConnector {
 }
 
 
-#[cfg(tests)]
-mod tests {
-    use supper::*;
-    #[test]
-    pub fn get_block_number() {
-
-    }
-
-}
